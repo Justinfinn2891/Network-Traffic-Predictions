@@ -5,72 +5,83 @@ import pandas as pd
 from sklearn.model_selection import train_test_split
 from sklearn.metrics import mean_squared_error, r2_score
 
-# Load and process dataset
-dataset_path = './data/Midterm_53_group.csv'
-dataset = pd.read_csv(dataset_path)
+from sklearn.preprocessing import StandardScaler
 
-# Check the columns to ensure everything is correct
-print(dataset.columns)
+network_data_pathName = './data/Midterm_53_group.csv'
+network_src_data = pd.read_csv(network_data_pathName)
+network_src_data['Time_src'] = network_src_data['Time'] / 60
 
-# Convert Time to a numerical value (hour + fraction of the hour)
-dataset['Hour'] = pd.to_datetime(dataset['Time'], unit='s').dt.hour + pd.to_datetime(dataset['Time'], unit='s').dt.minute / 60
+X_src = network_src_data['Time_src'].values.reshape(-1,1).astype(np.float32) #Turning them into 2d arrays
+y_src = network_src_data['Length'].values.reshape(-1,1).astype(np.float32)
 
-# Use Length as the traffic variable
-X = dataset['Hour'].values.reshape(-1, 1).astype(np.float32)
-y = dataset['Length'].values.reshape(-1, 1).astype(np.float32)
 
-# Split data
-X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+scaler_y = StandardScaler()
+y_src_scaled = scaler_y.fit_transform(y_src)
 
-# Convert to torch tensors
+X_train, X_test, y_train, y_test = train_test_split(X_src, y_src_scaled, test_size = 0.2, random_state= 42)
+
+#Tensors used for training
 X_train_tensor = torch.from_numpy(X_train)
-y_train_tensor = torch.from_numpy(y_train)
 X_test_tensor = torch.from_numpy(X_test)
+y_train_tensor = torch.from_numpy(y_train)
 y_test_tensor = torch.from_numpy(y_test)
 
-# Define the model
 class RegressionNetwork(torch.nn.Module):
     def __init__(self):
         super(RegressionNetwork, self).__init__()
-        self.linear = torch.nn.Linear(1, 1)  # Linear regression model
-    
+        self.linear = torch.nn.Linear(1,1)
+
     def forward(self, x):
         return self.linear(x)
 
-model = RegressionNetwork()
+network_model = RegressionNetwork()
 
-# Loss and optimizer
 criterion = torch.nn.MSELoss()
-optimizer = torch.optim.SGD(model.parameters(), lr=0.01)
+optimizer = torch.optim.SGD(network_model.parameters(), lr=0.001)
 
-# Training loop
 epochs = 1000
-for epoch in range(epochs):
-    model.train()
+for i in range(epochs):
+    network_model.train()
     optimizer.zero_grad()
-    outputs = model(X_train_tensor)
-    loss = criterion(outputs, y_train_tensor)
+    output_src = network_model(X_train_tensor)
+    loss = criterion(output_src, y_train_tensor)
     loss.backward()
     optimizer.step()
+
+    if (i + 1) % 10 == 0:
+        print(f'EPOCH: [{i + 1} / {epochs}], Loss: {loss.item():.4f}')
+
+network_model.eval() #Stop training 
+
+with torch.no_grad():
+    full_pred_scaled = network_model(torch.from_numpy(X_src).float()).numpy().flatten()
+    full_pred = scaler_y.inverse_transform(full_pred_scaled.reshape(-1, 1)).flatten()
+
+sorted_indices = X_src[:, 0].argsort()
+X_sorted = X_src[sorted_indices]
+full_pred_sorted = full_pred[sorted_indices]
+
+def predict_bytes(model, time_in_seconds, scaler):
+    # Convert time to minutes, float32, and make it 2D tensor shape (1,1)
+    time_in_minutes = np.array([[time_in_seconds / 60]], dtype=np.float32)
+    time_tensor = torch.from_numpy(time_in_minutes)
     
-    if (epoch + 1) % 100 == 0:
-        print(f'Epoch [{epoch+1}/{epochs}], Loss: {loss.item():.4f}')
+    model.eval()
+    with torch.no_grad():
+        pred_scaled = model(time_tensor).numpy().reshape(-1, 1)
+    
+    # Inverse transform to get original byte scale
+    pred_original = scaler.inverse_transform(pred_scaled)
+    
+    return pred_original.item()
 
-# Evaluate
-model.eval()
-with torch.no_grad():
-    y_pred_tensor = model(X_test_tensor)
-    y_pred = y_pred_tensor.numpy()
-    print("R² score:", r2_score(y_test, y_pred))
-    print("MSE:", mean_squared_error(y_test, y_pred))
+input_time_seconds = 5000  # For example, 1 hour = 3600 seconds
+predicted_bytes = predict_bytes(network_model, input_time_seconds, scaler_y)
+print(f"Predicted network traffic bytes at {input_time_seconds} seconds (minute {input_time_seconds/60:.2f}): {predicted_bytes:.2f}")
 
-# Plot
-with torch.no_grad():
-    full_pred = model(torch.from_numpy(X)).numpy()
-
-plt.scatter(X, y, color='blue', label='Actual Traffic')
-plt.plot(X, full_pred, color='red', label='Predicted Line')
-plt.xlabel('Hour of Day')
+plt.scatter(X_src, scaler_y.inverse_transform(y_src).flatten(), color='blue', label='Actual Traffic')
+plt.plot(X_sorted, full_pred_sorted, color='red', label='Predicted Line')
+plt.xlabel('Minute of Day')
 plt.ylabel('Network Traffic (Length in Bytes)')
 plt.legend()
 plt.title('Network Traffic Prediction using Linear Regression (PyTorch)')
