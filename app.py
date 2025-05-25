@@ -86,3 +86,6 @@ plt.ylabel('Network Traffic (Length in Bytes)')
 plt.legend()
 plt.title('Network Traffic Prediction using Linear Regression (PyTorch)')
 plt.show()
+
+for name, param in network_model.named_parameters():
+    print(f"{name}: {param.data.item():.6f}")
