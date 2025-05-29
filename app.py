@@ -17,8 +17,11 @@ y_src = network_src_data['Length'].values.reshape(-1,1).astype(np.float32)
 
 scaler_y = StandardScaler()
 y_src_scaled = scaler_y.fit_transform(y_src)
+scaler_X = StandardScaler()
+X_src_scaled = scaler_X.fit_transform(X_src)
 
-X_train, X_test, y_train, y_test = train_test_split(X_src, y_src_scaled, test_size = 0.2, random_state= 42)
+# Then update your train/test split
+X_train, X_test, y_train, y_test = train_test_split(X_src_scaled, y_src_scaled, test_size = 0.2, random_state= 42)
 
 #Tensors used for training
 X_train_tensor = torch.from_numpy(X_train)
@@ -29,17 +32,24 @@ y_test_tensor = torch.from_numpy(y_test)
 class RegressionNetwork(torch.nn.Module):
     def __init__(self):
         super(RegressionNetwork, self).__init__()
-        self.linear = torch.nn.Linear(1,1)
+        self.net = torch.nn.Sequential(
+            torch.nn.Linear(1, 16),
+            torch.nn.ReLU(),
+            torch.nn.Linear(16, 16),
+            torch.nn.ReLU(),
+            torch.nn.Linear(16, 1)
+        )
 
     def forward(self, x):
-        return self.linear(x)
+        return self.net(x)
 
 network_model = RegressionNetwork()
 
 criterion = torch.nn.MSELoss()
-optimizer = torch.optim.SGD(network_model.parameters(), lr=0.001)
+optimizer = torch.optim.Adam(network_model.parameters(), lr=0.001)
 
-epochs = 1000
+
+epochs = 100000
 for i in range(epochs):
     network_model.train()
     optimizer.zero_grad()
@@ -48,7 +58,7 @@ for i in range(epochs):
     loss.backward()
     optimizer.step()
 
-    if (i + 1) % 10 == 0:
+    if (i + 1) % 100 == 0:
         print(f'EPOCH: [{i + 1} / {epochs}], Loss: {loss.item():.4f}')
 
 network_model.eval() #Stop training 
@@ -61,30 +71,28 @@ sorted_indices = X_src[:, 0].argsort()
 X_sorted = X_src[sorted_indices]
 full_pred_sorted = full_pred[sorted_indices]
 
-def predict_bytes(model, time_in_seconds, scaler):
-    # Convert time to minutes, float32, and make it 2D tensor shape (1,1)
+def predict_bytes(model, time_in_seconds, scaler_X, scaler_y):
     time_in_minutes = np.array([[time_in_seconds / 60]], dtype=np.float32)
-    time_tensor = torch.from_numpy(time_in_minutes)
-    
+    time_scaled = scaler_X.transform(time_in_minutes)
+    time_tensor = torch.from_numpy(time_scaled)
+
     model.eval()
     with torch.no_grad():
         pred_scaled = model(time_tensor).numpy().reshape(-1, 1)
     
-    # Inverse transform to get original byte scale
-    pred_original = scaler.inverse_transform(pred_scaled)
-    
+    pred_original = scaler_y.inverse_transform(pred_scaled)
     return pred_original.item()
 
 input_time_seconds = 5000  # For example, 1 hour = 3600 seconds
-predicted_bytes = predict_bytes(network_model, input_time_seconds, scaler_y)
+predicted_bytes = predict_bytes(network_model, input_time_seconds, scaler_X, scaler_y)
 print(f"Predicted network traffic bytes at {input_time_seconds} seconds (minute {input_time_seconds/60:.2f}): {predicted_bytes:.2f}")
 
-plt.scatter(X_src, scaler_y.inverse_transform(y_src).flatten(), color='blue', label='Actual Traffic')
-plt.plot(X_sorted, full_pred_sorted, color='red', label='Predicted Line')
-plt.xlabel('Minute of Day')
-plt.ylabel('Network Traffic (Length in Bytes)')
+plt.scatter(X_src, y_src, alpha=0.5, label="Actual")
+plt.plot(X_sorted, full_pred_sorted, color='red', linewidth=2, label="Predicted")
+plt.xlabel("Time (minutes)")
+plt.ylabel("Packet Length")
+plt.title("Network Traffic Prediction")
 plt.legend()
-plt.title('Network Traffic Prediction using Linear Regression (PyTorch)')
 plt.show()
 
 for name, param in network_model.named_parameters():
